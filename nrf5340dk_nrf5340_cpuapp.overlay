@@ -1,0 +1,20 @@
+#include <zephyr/dt-bindings/i2c/i2c.h>
+
+// &pinctrl{
+// 	// Just initilizing the pinctrl node to avoid a warning about it being empty.
+// };
+
+&i2c1{
+
+	compatible = "nordic,nrf-twim";
+	status = "okay";
+	clock-frequency = <I2C_BITRATE_FAST>;
+
+	mpu6500: mpu6500@68 {
+		compatible = "invensense,mpu6050";
+		reg = <0x68>;
+		label = "MPU6500";
+		status = "okay";
+	};
+
+};
