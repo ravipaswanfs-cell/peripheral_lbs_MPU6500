@@ -10,7 +10,7 @@ project(peripheral_lbs)
 
 # NORDIC SDK APP START
 target_sources(app PRIVATE
-  src/main.c src/sensor_data_collector.c
+  src/main.c src/sensor_data_collector.c src/ble_imu_service.c
 )
 
 target_include_directories(app PRIVATE inc)

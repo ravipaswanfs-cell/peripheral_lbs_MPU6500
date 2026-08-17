@@ -1,6 +1,8 @@
 #ifndef SENSOR_DATA_COLLECTOR_H
 #define SENSOR_DATA_COLLECTOR_H     
 
+#include <zephyr/drivers/sensor.h>
+
 typedef struct {
     struct sensor_value temp;
     struct sensor_value pres;

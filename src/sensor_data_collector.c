@@ -6,6 +6,8 @@
 #include <bluetooth/services/nsms.h>
 #include <zephyr/devicetree.h>
 #include "sensor_data_collector.h"
+#include "ble_imu_service.h"
+
 
 #define SENSOR_THREAD_PRIORITY 7
 #define SENSOR_THREAD_STACK_SIZE 1024
@@ -99,42 +101,59 @@ int sensor_data_collection_init(void) {
     const struct device *sim_dev = get_mpu6500_sensor();
 
     if (sim_dev == NULL) {
-        printk("Failed to get MPU6500 sensor device\n");
-        return -1; // Return error code
+        printk("[INIT FAIL] MPU6500 device not found/ready\n");
+        return -1;
     }
-    // Initialize sensor data collection resources here
-    while(1){
-       Sensorreadings value;
-       int rc = sensor_sample_fetch(sim_dev);
-       if (rc){
-              printk("Sensor sample fetch error: %d\n", rc);
-              k_sleep(K_SECONDS(CONFIG_APP_CONTROL_SAMPLING_INTERVAL_S));
-              continue; // Skip to the next iteration if fetch fails
-       }
 
-       sensor_channel_get(sim_dev, SENSOR_CHAN_DIE_TEMP, &value.temp);
-       sensor_channel_get(sim_dev, SENSOR_CHAN_ACCEL_XYZ, value.acc);
-       sensor_channel_get(sim_dev, SENSOR_CHAN_GYRO_XYZ, value.gyro);
+    int64_t last_ts = k_uptime_get();
+    int64_t max_dt = 0;
+    int64_t sample_count = 0;
 
-        printk("sensor Thread Reportings!\n");
-        printk("Die Temp: %.2f C\n", value.temp.val1 + value.temp.val2 / 1000000.0);
-        printk("Accelerometer: X: %.2f, Y: %.2f, Z: %.2f\n",
+    while (1) {
+        Sensorreadings value;
+        int rc = sensor_sample_fetch(sim_dev);
+        if (rc) {
+            printk("[SAMPLE FETCH FAIL] err=%d, retrying in %dms\n",
+                   rc, CONFIG_APP_SAMPLING_INTERVAL_MS);
+            k_sleep(K_MSEC(CONFIG_APP_SAMPLING_INTERVAL_MS));
+            continue;
+        }
+
+        int64_t now = k_uptime_get();
+        int64_t dt = now - last_ts;
+        last_ts = now;
+        sample_count++;
+        if (dt > max_dt) {
+            max_dt = dt;
+        }
+
+        sensor_channel_get(sim_dev, SENSOR_CHAN_DIE_TEMP, &value.temp);
+        sensor_channel_get(sim_dev, SENSOR_CHAN_ACCEL_XYZ, value.acc);
+        sensor_channel_get(sim_dev, SENSOR_CHAN_GYRO_XYZ, value.gyro);
+
+        printk("[SAMPLE #%lld] dt=%lldms (target=%dms, worst=%lldms)%s\n",
+               sample_count, dt, CONFIG_APP_SAMPLING_INTERVAL_MS, max_dt,
+               (dt > CONFIG_APP_SAMPLING_INTERVAL_MS + 5) ? "  <-- JITTER SPIKE" : "");
+
+        printk("  Temp: %.2f C | Accel[X:%.2f Y:%.2f Z:%.2f] | Gyro[X:%.2f Y:%.2f Z:%.2f]\n",
+               value.temp.val1 + value.temp.val2 / 1000000.0,
                value.acc[0].val1 + value.acc[0].val2 / 1000000.0,
                value.acc[1].val1 + value.acc[1].val2 / 1000000.0,
-               value.acc[2].val1 + value.acc[2].val2 / 1000000.0);
-        printk("Gyroscope: X: %.2f, Y: %.2f, Z: %.2f\n",
+               value.acc[2].val1 + value.acc[2].val2 / 1000000.0,
                value.gyro[0].val1 + value.gyro[0].val2 / 1000000.0,
                value.gyro[1].val1 + value.gyro[1].val2 / 1000000.0,
                value.gyro[2].val1 + value.gyro[2].val2 / 1000000.0);
 
-        if(current_conn != NULL){
-            send_sensor_value(value.acc, 3, "acc");
-            send_sensor_value(value.gyro, 3, "gyr");
-            send_sensor_value(&value.temp, 1, "temp");
-        }
-        k_sleep(K_SECONDS(CONFIG_APP_CONTROL_SAMPLING_INTERVAL_S));
+
+    ble_imu_batch_add_sample(value.acc, value.gyro);
+
+    if (current_conn != NULL) {
+        send_sensor_value(&value.temp, 1, "temp");   // keep temp on NSMS, it's slow-changing
     }
-    return 0; // Return 0 on success
+
+        k_sleep(K_MSEC(CONFIG_APP_SAMPLING_INTERVAL_MS));
+    }
+    return 0;
 }
 
 K_THREAD_DEFINE(sensor_data_collector_id, SENSOR_THREAD_STACK_SIZE, sensor_data_collection_init, NULL, NULL, NULL, SENSOR_THREAD_PRIORITY, 0, 1000);
