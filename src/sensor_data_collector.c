@@ -109,6 +109,8 @@ int sensor_data_collection_init(void) {
     int64_t max_dt = 0;
     int64_t sample_count = 0;
 
+#define LOG_EVERY_N_SAMPLES 10
+
     while (1) {
         Sensorreadings value;
         int rc = sensor_sample_fetch(sim_dev);
@@ -131,29 +133,33 @@ int sensor_data_collection_init(void) {
         sensor_channel_get(sim_dev, SENSOR_CHAN_ACCEL_XYZ, value.acc);
         sensor_channel_get(sim_dev, SENSOR_CHAN_GYRO_XYZ, value.gyro);
 
-        printk("[SAMPLE #%lld] dt=%lldms (target=%dms, worst=%lldms)%s\n",
-               sample_count, dt, CONFIG_APP_SAMPLING_INTERVAL_MS, max_dt,
-               (dt > CONFIG_APP_SAMPLING_INTERVAL_MS + 5) ? "  <-- JITTER SPIKE" : "");
+        /* Only print every Nth sample — printing every sample at 100Hz
+         * floods RTT/UART and corrupts output, and eats into the sampling budget. */
+        if (sample_count % LOG_EVERY_N_SAMPLES == 0) {
+            printk("[SAMPLE #%lld] dt=%lldms (target=%dms, worst=%lldms)%s\n",
+                   sample_count, dt, CONFIG_APP_SAMPLING_INTERVAL_MS, max_dt,
+                   (dt > CONFIG_APP_SAMPLING_INTERVAL_MS + 5) ? "  <-- JITTER SPIKE" : "");
 
-        printk("  Temp: %.2f C | Accel[X:%.2f Y:%.2f Z:%.2f] | Gyro[X:%.2f Y:%.2f Z:%.2f]\n",
-               value.temp.val1 + value.temp.val2 / 1000000.0,
-               value.acc[0].val1 + value.acc[0].val2 / 1000000.0,
-               value.acc[1].val1 + value.acc[1].val2 / 1000000.0,
-               value.acc[2].val1 + value.acc[2].val2 / 1000000.0,
-               value.gyro[0].val1 + value.gyro[0].val2 / 1000000.0,
-               value.gyro[1].val1 + value.gyro[1].val2 / 1000000.0,
-               value.gyro[2].val1 + value.gyro[2].val2 / 1000000.0);
+            printk("  Temp: %.2f C | Accel[X:%.2f Y:%.2f Z:%.2f] | Gyro[X:%.2f Y:%.2f Z:%.2f]\n",
+                   value.temp.val1 + value.temp.val2 / 1000000.0,
+                   value.acc[0].val1 + value.acc[0].val2 / 1000000.0,
+                   value.acc[1].val1 + value.acc[1].val2 / 1000000.0,
+                   value.acc[2].val1 + value.acc[2].val2 / 1000000.0,
+                   value.gyro[0].val1 + value.gyro[0].val2 / 1000000.0,
+                   value.gyro[1].val1 + value.gyro[1].val2 / 1000000.0,
+                   value.gyro[2].val1 + value.gyro[2].val2 / 1000000.0);
+        }
 
-
-    ble_imu_batch_add_sample(value.acc, value.gyro);
-
-    if (current_conn != NULL) {
-        send_sensor_value(&value.temp, 1, "temp");   // keep temp on NSMS, it's slow-changing
-    }
+        if (current_conn != NULL) {
+            send_sensor_value(value.acc, 3, "acc");
+            send_sensor_value(value.gyro, 3, "gyr");
+            send_sensor_value(&value.temp, 1, "temp");
+        }
 
         k_sleep(K_MSEC(CONFIG_APP_SAMPLING_INTERVAL_MS));
     }
     return 0;
 }
+
 
 K_THREAD_DEFINE(sensor_data_collector_id, SENSOR_THREAD_STACK_SIZE, sensor_data_collection_init, NULL, NULL, NULL, SENSOR_THREAD_PRIORITY, 0, 1000);

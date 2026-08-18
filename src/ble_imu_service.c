@@ -6,7 +6,8 @@
 #include <zephyr/sys/printk.h>
 #include <string.h>
 
-/* Custom 128-bit UUIDs — generated for this project, keep as-is or regenerate your own */
+/* Custom 128-bit UUIDs for this project. Regenerate your own if you want
+ * globally unique values (e.g. `uuidgen`), these are fine for dev/test. */
 #define BT_UUID_IMU_SERVICE_VAL \
     BT_UUID_128_ENCODE(0x12345678, 0x1234, 0x5678, 0x1234, 0x56789abc0001)
 #define BT_UUID_IMU_BATCH_CHRC_VAL \
@@ -18,10 +19,14 @@ static struct bt_uuid_128 imu_batch_uuid = BT_UUID_INIT_128(BT_UUID_IMU_BATCH_CH
 static struct bt_conn *imu_conn;
 static bool notify_enabled;
 
-/* Double buffer so we can fill one while the other is in-flight over BLE */
+/* Double buffer: fill one while the other is (potentially) still being
+ * transmitted, so filling never blocks on the radio. */
 static struct imu_batch_packet batch_buf[2];
-static uint8_t active_buf = 0;
-static uint8_t sample_idx = 0;
+static uint8_t active_buf;
+static uint8_t sample_idx;
+
+static uint32_t notify_ok_count;
+static uint32_t notify_fail_count;
 
 static void imu_ccc_cfg_changed(const struct bt_gatt_attr *attr, uint16_t value)
 {
@@ -41,6 +46,8 @@ static void imu_connected(struct bt_conn *conn, uint8_t err)
 {
     if (!err) {
         imu_conn = conn;
+        notify_ok_count = 0;
+        notify_fail_count = 0;
     }
 }
 
@@ -65,14 +72,20 @@ int ble_imu_service_init(void)
     sample_idx = 0;
     active_buf = 0;
     memset(batch_buf, 0, sizeof(batch_buf));
+    notify_ok_count = 0;
+    notify_fail_count = 0;
     return 0;
 }
 
 static int16_t sv_to_millis(const struct sensor_value *v)
 {
     double d = sensor_value_to_double(v) * 1000.0;
-    if (d > 32767.0) d = 32767.0;
-    if (d < -32768.0) d = -32768.0;
+    if (d > 32767.0) {
+        d = 32767.0;
+    }
+    if (d < -32768.0) {
+        d = -32768.0;
+    }
     return (int16_t)d;
 }
 
@@ -86,7 +99,14 @@ static void flush_batch(uint8_t buf_to_send)
                               &batch_buf[buf_to_send],
                               sizeof(struct imu_batch_packet));
     if (err) {
-        printk("[BLE IMU] notify failed err=%d (buffer likely full)\n", err);
+        notify_fail_count++;
+        /* Throttle failure logging so a jammed link doesn't itself flood RTT */
+        if (notify_fail_count % 20 == 1) {
+            printk("[BLE IMU] notify failed err=%d (fail_count=%u, ok_count=%u)\n",
+                   err, notify_fail_count, notify_ok_count);
+        }
+    } else {
+        notify_ok_count++;
     }
 }
 
@@ -111,7 +131,7 @@ void ble_imu_batch_add_sample(const struct sensor_value *acc,
 
     if (sample_idx >= IMU_BATCH_SIZE) {
         uint8_t full_buf = active_buf;
-        active_buf = 1 - active_buf;   // swap to the other buffer immediately
+        active_buf = 1 - active_buf;   /* swap immediately, don't wait on TX */
         sample_idx = 0;
         flush_batch(full_buf);
     }

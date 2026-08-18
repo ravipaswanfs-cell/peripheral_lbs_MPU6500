@@ -3,6 +3,7 @@
 
 #include <zephyr/kernel.h>
 #include <zephyr/drivers/sensor.h>
+#include <stdbool.h>
 
 #define IMU_BATCH_SIZE  10
 
